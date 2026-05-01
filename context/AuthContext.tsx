@@ -10,13 +10,19 @@ interface UserProfile {
   name?: string;
 }
 
+interface ImpersonatedUser {
+  uid: string;
+  name: string;
+  deviceId: string;
+}
+
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
   isAdmin: boolean;
-  adminSelectedDeviceId: string | null;
-  setAdminSelectedDeviceId: (id: string | null) => void;
+  impersonatedUser: ImpersonatedUser | null;
+  setImpersonatedUser: (user: ImpersonatedUser | null) => void;
   activeDeviceId: string | null;
 }
 
@@ -25,8 +31,8 @@ const AuthContext = createContext<AuthContextType>({
   profile: null,
   loading: true,
   isAdmin: false,
-  adminSelectedDeviceId: null,
-  setAdminSelectedDeviceId: () => {},
+  impersonatedUser: null,
+  setImpersonatedUser: () => {},
   activeDeviceId: null,
 });
 
@@ -36,7 +42,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [adminSelectedDeviceId, setAdminSelectedDeviceId] = useState<string | null>(null);
+  const [impersonatedUser, setImpersonatedUser] = useState<ImpersonatedUser | null>(null);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
@@ -74,15 +80,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const isAdmin = profile?.role === 'admin';
-  const activeDeviceId = isAdmin && adminSelectedDeviceId ? adminSelectedDeviceId : (profile?.device_id || null);
+  const activeDeviceId = isAdmin && impersonatedUser ? impersonatedUser.deviceId : (profile?.device_id || null);
 
   const value = {
     user,
     profile,
     loading,
     isAdmin,
-    adminSelectedDeviceId,
-    setAdminSelectedDeviceId,
+    impersonatedUser,
+    setImpersonatedUser,
     activeDeviceId,
   };
 

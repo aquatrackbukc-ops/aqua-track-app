@@ -4,13 +4,16 @@ import { Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/context/AuthContext';
+import AdminImpersonationBanner from '@/components/AdminImpersonationBanner';
 
 export default function TabLayout() {
   const { isAdmin } = useAuth();
 
   return (
-    <Tabs
-      screenOptions={{
+    <>
+      <AdminImpersonationBanner />
+      <Tabs
+        screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: Colors.tabActive,
         tabBarInactiveTintColor: Colors.tabInactive,
@@ -66,5 +69,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </>
   );
 }

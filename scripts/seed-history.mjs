@@ -14,75 +14,69 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-const dummyData = {
-  "settings/pricing": {
-    pricePerLiter: 0.05,
-    currency: "USD",
-    lastUpdated: new Date().toISOString()
-  },
-  history: {
-    device_01: {
-      "2023-11": {
-        monthName: "November 2023",
-        totalLiters: 11736.5,
-        totalCost: 586.82,
-        highestUsageDay: "2023-11-23",
-        averageDailyLiters: 391.2
-      },
-      "2023-12": {
-        monthName: "December 2023",
-        totalLiters: 14574.2,
-        totalCost: 728.71,
-        highestUsageDay: "2023-12-25",
-        averageDailyLiters: 470.1
-      },
-      "2024-01": {
-        monthName: "January 2024",
-        totalLiters: 10977.6,
-        totalCost: 548.88,
-        highestUsageDay: "2024-01-01",
-        averageDailyLiters: 354.1
-      },
-      "2024-02": {
-        monthName: "February 2024",
-        totalLiters: 10412.8,
-        totalCost: 520.64,
-        highestUsageDay: "2024-02-14",
-        averageDailyLiters: 359.0
-      },
-      "2024-03": {
-        monthName: "March 2024",
-        totalLiters: 11547.1,
-        totalCost: 577.35,
-        highestUsageDay: "2024-03-17",
-        averageDailyLiters: 372.4
-      }
-    },
-    device_02: {
-      "2024-02": {
-        monthName: "February 2024",
-        totalLiters: 4542.4,
-        totalCost: 227.12,
-        highestUsageDay: "2024-02-05",
-        averageDailyLiters: 156.6
-      },
-      "2024-03": {
-        monthName: "March 2024",
-        totalLiters: 5112.5,
-        totalCost: 255.62,
-        highestUsageDay: "2024-03-22",
-        averageDailyLiters: 164.9
-      }
-    }
-  }
+const pricePerLiter = 0.05;
+
+const generateMonthData = (year, monthIndex, baseLiters) => {
+  const date = new Date(year, monthIndex);
+  const monthName = date.toLocaleString('en-US', { month: 'long' }) + ' ' + year;
+  const monthStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  
+  const variation = 0.8 + (Math.random() * 0.4); // +/- 20%
+  const totalLiters = parseFloat((baseLiters * variation).toFixed(1));
+  const totalCost = parseFloat((totalLiters * pricePerLiter).toFixed(2));
+  
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const randomDay = Math.floor(Math.random() * daysInMonth) + 1;
+  const highestUsageDay = `${monthStr}-${String(randomDay).padStart(2, '0')}`;
+  const averageDailyLiters = parseFloat((totalLiters / daysInMonth).toFixed(1));
+
+  return {
+    monthName,
+    totalLiters,
+    totalCost,
+    highestUsageDay,
+    averageDailyLiters,
+    pricePerLiter
+  };
 };
 
+const periods = [
+  ...Array.from({ length: 12 }, (_, i) => ({ year: 2025, month: i })),
+  ...Array.from({ length: 3 }, (_, i) => ({ year: 2026, month: i }))
+];
+
+const devices = ['device_01', 'device_02', 'device_03'];
+const baseLitersMap = {
+  'device_01': 12000,
+  'device_02': 5000,
+  'device_03': 8500
+};
+
+const dummyData = {
+  history: {}
+};
+
+// Populate History
+for (const deviceId of devices) {
+  const base = baseLitersMap[deviceId];
+  
+  // History
+  dummyData.history[deviceId] = {};
+  for (const { year, month } of periods) {
+    const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+    dummyData.history[deviceId][monthStr] = generateMonthData(year, month, base);
+  }
+}
+
 async function seedDatabase() {
-  console.log("Seeding dummy data to Firebase...");
+  console.log("Seeding ONLY History dummy data to Firebase...");
   try {
     const rootRef = ref(db);
+    // Using update at root ensures we don't delete other nodes like 'users', 'AquaTrack', etc.
     await update(rootRef, dummyData);
-    console.log("Successfully seeded history and pricing settings data!");
+    console.log("Successfully seeded:");
+    console.log(` - 15 months (2025 - Mar 2026) of history for ${devices.join(', ')}`);
+    console.log(` - Included pricePerLiter in each month's record.`);
     process.exit(0);
   } catch (error) {
     console.error("Error writing data to Firebase:", error);

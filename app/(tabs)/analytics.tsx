@@ -9,6 +9,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/theme';
@@ -117,7 +118,7 @@ function SummaryRow({ data }: { data: MonthlyDataNode[] }) {
 
 // ── Main Screen ────────────────────────────────────────────────────────────
 export default function AnalyticsScreen() {
-  const { profile, loading: authLoading, activeDeviceId } = useAuth();
+  const { profile, loading: authLoading, activeDeviceId, impersonatedUser, setImpersonatedUser, isAdmin } = useAuth();
   const currentYear = new Date().getFullYear();
   const currentMonthIndex = new Date().getMonth();
 
@@ -127,7 +128,7 @@ export default function AnalyticsScreen() {
   const [analyticsData, setAnalyticsData] = useState<MonthlyDataNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState<number>(currentMonthIndex);
-  const [showOlderYears, setShowOlderYears] = useState(false);
+  const [showYearPicker, setShowYearPicker] = useState(false);
 
   const headerAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -144,6 +145,7 @@ export default function AnalyticsScreen() {
     const historyRef = ref(db, `history/${activeDeviceId}`);
     const unsubscribeHistory = onValue(historyRef, (snapshot) => {
       const val = snapshot.val();
+      setLoading(false);
 
       if (val && typeof val === 'object') {
         // Keys are "YYYY-MM", map to MonthlyDataNode
@@ -174,7 +176,7 @@ export default function AnalyticsScreen() {
       unsubscribeHistory();
       unsubscribeLive();
     };
-  }, [activeDeviceId, authLoading]);
+  }, [activeDeviceId, authLoading, isAdmin]);
 
   // Rebuild 12-slot chart array whenever year or records change
   useEffect(() => {
@@ -204,10 +206,11 @@ export default function AnalyticsScreen() {
       setSelectedIndex(currentMonthIndex);
     } else {
       setSelectedIndex(11); // Defaults to Dec for historical years, can be changed by user
+      setSelectedIndex(11);
     }
   }, [selectedYear, allRecords, liveTotalLiters]);
 
-  if (authLoading || (loading && activeDeviceId)) {
+  if (authLoading || loading) {
     return (
       <View style={[styles.root, styles.center]}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -215,183 +218,200 @@ export default function AnalyticsScreen() {
     );
   }
 
-  if (!activeDeviceId) {
-    return (
-      <View style={[styles.root, styles.center, { padding: 40 }]}>
-        <AdminDeviceSelector />
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Ionicons name="stats-chart-outline" size={80} color={Colors.textMuted} />
-          <Text style={styles.emptyTitle}>Insights Locked</Text>
-          <Text style={styles.emptySub}>
-            Monthly analytics will appear here once your device is active and data is recorded.
-          </Text>
-        </View>
-      </View>
-    );
-  }
-
   const rawMax = Math.max(...analyticsData.map(d => Number(d.liters) || 0), 2000);
-  // Pad the max value heavily (20% headroom) and round to nearest 1000 to cleanly cap the chart
   const maxValue = Math.ceil((rawMax * 1.2) / 1000) * 1000;
   const selected = analyticsData[selectedIndex] || null;
-  
-  // All years in data sorted descending; always include currentYear at front
   const allYears = [...new Set([currentYear, ...allRecords.map(r => r.year)])].sort((a, b) => b - a);
-  // Max 2 visible pills so '···' almost always appears for testing
-  const visibleYears = allYears.slice(0, 2);
-  const olderYears = allYears.slice(2);
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.bg} />
+      
+      <Modal
+        visible={showYearPicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowYearPicker(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setShowYearPicker(false)}
+        >
+          <View style={styles.yearModalContent}>
+            <Text style={styles.yearModalTitle}>Select Year</Text>
+            <View style={styles.yearGridScrollContainer}>
+              <ScrollView 
+                style={styles.yearGridScroll}
+                contentContainerStyle={styles.yearGrid}
+                showsVerticalScrollIndicator={true}
+                nestedScrollEnabled
+              >
+                {allYears.map(y => (
+                  <TouchableOpacity
+                    key={y}
+                    style={[
+                      styles.yearGridItem,
+                      selectedYear === y && styles.yearGridItemActive
+                    ]}
+                    onPress={() => {
+                      setSelectedYear(y);
+                      setShowYearPicker(false);
+                    }}
+                  >
+                    <Text style={[
+                      styles.yearGridText,
+                      selectedYear === y && styles.yearGridTextActive
+                    ]}>
+                      {y}
+                    </Text>
+                    {y === currentYear && <View style={styles.currentYearDot} />}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+            <TouchableOpacity 
+              style={styles.modalCloseBtn}
+              onPress={() => setShowYearPicker(false)}
+            >
+              <Text style={styles.modalCloseBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}>
 
-        {/* Header */}
         <Animated.View
           style={[
             styles.header,
             {
               opacity: headerAnim,
               transform: [{ translateY: headerAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] }) }],
-              zIndex: 100, // Elevates the dropdown above the rest of the scroll view
-              elevation: 10,
             },
           ]}>
-          <AdminDeviceSelector />
-          <View style={{ paddingHorizontal: 20, paddingTop: 10 }}>
-            <Text style={styles.screenLabel}>Analytics</Text>
-            <Text style={styles.screenTitle}>{selectedYear} Usage</Text>
-            <Text style={styles.deviceIdText}>Connected Device: {activeDeviceId}</Text>
-          </View>
-          {/* Year selector pills */}
-          {allYears.length > 1 && (
-            <View style={styles.yearPillRow}>
-              {visibleYears.map(y => (
-                <TouchableOpacity
-                  key={y}
-                  style={[styles.yearPill, selectedYear === y && styles.yearPillActive]}
-                  onPress={() => { setSelectedYear(y); setShowOlderYears(false); }}>
-                  <Text style={[styles.yearPillText, selectedYear === y && styles.yearPillTextActive]}>
-                    {y === currentYear ? `${y} ·` : `${y}`}
+          <TouchableOpacity 
+            activeOpacity={0.7}
+            onPress={() => setShowYearPicker(true)}
+            style={{ paddingHorizontal: 20, paddingTop: 10 }}
+          >
+            <View style={styles.screenLabelRow}>
+              <Text style={styles.screenLabel}>Analytics</Text>
+              <Ionicons name="chevron-down" size={12} color={Colors.textMuted} />
+            </View>
+            <View style={styles.titleWithIcon}>
+              <Text style={styles.screenTitle}>{selectedYear} Usage</Text>
+              <View style={styles.yearIndicator}>
+                <Ionicons name="calendar-outline" size={14} color={Colors.primary} />
+              </View>
+            </View>
+            <View style={styles.headerSubRow}>
+              {impersonatedUser ? (
+                <TouchableOpacity 
+                  style={styles.impersonationBadge}
+                  onPress={() => setImpersonatedUser(null)}
+                >
+                  <Ionicons name="eye-outline" size={14} color={Colors.accent} />
+                  <Text style={styles.impersonationText}>
+                    {impersonatedUser.uid === 'raw' ? `Meter: ${impersonatedUser.deviceId}` : `Viewing: ${impersonatedUser.name}`}
                   </Text>
+                  <Ionicons name="close-circle" size={14} color={Colors.textMuted} style={{marginLeft: 4}} />
                 </TouchableOpacity>
-              ))}
+              ) : (
+                <Text style={styles.deviceIdText}>Connected Device: {activeDeviceId || (isAdmin ? 'Global Mode' : 'No Device')}</Text>
+              )}
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
+        {/* Main Content */}
+        {!activeDeviceId ? (
+          <View style={[styles.center, { marginTop: 100, padding: 40 }]}>
+            <Ionicons name="stats-chart-outline" size={80} color={isAdmin ? Colors.primary : Colors.textMuted} />
+            <Text style={styles.emptyTitle}>{isAdmin ? 'Analysis Portal' : 'Insights Locked'}</Text>
+            <Text style={styles.emptySub}>
+              {isAdmin 
+                ? 'Select a user or a specific meter from the command center to view their historical usage and trends.' 
+                : 'Monthly analytics will appear here once your device is active and data is recorded.'}
+            </Text>
+          </View>
+        ) : (
+          <>
+            {/* Summary strip */}
+            <SummaryRow data={analyticsData} />
 
-              {/* Overflow button for older years */}
-              {olderYears.length > 0 && (
-                <View>
-                  <TouchableOpacity
-                    style={[styles.yearPill, olderYears.includes(selectedYear) && styles.yearPillActive]}
-                    onPress={() => setShowOlderYears(v => !v)}>
-                    <Text style={[styles.yearPillText, olderYears.includes(selectedYear) && styles.yearPillTextActive]}>
-                      {olderYears.includes(selectedYear) ? `${selectedYear}` : '···'}
-                    </Text>
-                    <Ionicons
-                      name={showOlderYears ? 'chevron-up' : 'chevron-down'}
-                      size={12}
-                      color={olderYears.includes(selectedYear) ? Colors.primary : Colors.textMuted}
-                    />
-                  </TouchableOpacity>
+            {/* Chart card */}
+            <View style={styles.chartCard}>
+              <View style={styles.chartHeader}>
+                <Text style={styles.chartTitle}>Monthly Consumption</Text>
+                <View style={styles.legendRow}>
+                  <View style={[styles.legendDot, { backgroundColor: Colors.accent }]} />
+                  <Text style={styles.legendText}>Current</Text>
+                  <View style={[styles.legendDot, { backgroundColor: Colors.primary, marginLeft: 10 }]} />
+                  <Text style={styles.legendText}>Past</Text>
+                </View>
+              </View>
 
-                  {/* Dropdown */}
-                  {showOlderYears && (
-                    <View style={styles.olderDropdown}>
-                      {olderYears.map(y => (
-                        <TouchableOpacity
-                          key={y}
-                          style={[styles.olderDropdownItem, selectedYear === y && styles.olderDropdownItemActive]}
-                          onPress={() => { setSelectedYear(y); setShowOlderYears(false); }}>
-                          <Text style={[styles.olderDropdownText, selectedYear === y && styles.yearPillTextActive]}>
-                            {y}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
+              {selected && (
+                <View style={styles.selectedInfo}>
+                  <Text style={styles.selectedMonth}>{selected.month} {selectedYear}</Text>
+                  <Text style={styles.selectedValue}>
+                    {selected.liters >= 1000
+                      ? `${(selected.liters / 1000).toFixed(2)}k L`
+                      : `${selected.liters.toFixed(1)} L`}
+                  </Text>
+                  {selectedIndex === currentMonthIndex && selectedYear === currentYear && (
+                    <View style={styles.partialBadge}>
+                      <Text style={styles.partialBadgeText}>Live Month</Text>
                     </View>
                   )}
                 </View>
               )}
-            </View>
-          )}
-        </Animated.View>
 
-        {/* Summary strip */}
-        <SummaryRow data={analyticsData} />
-
-        {/* Chart card */}
-        <View style={styles.chartCard}>
-          <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>Monthly Consumption</Text>
-            <View style={styles.legendRow}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.accent }]} />
-              <Text style={styles.legendText}>Current</Text>
-              <View style={[styles.legendDot, { backgroundColor: Colors.primary, marginLeft: 10 }]} />
-              <Text style={styles.legendText}>Past</Text>
-            </View>
-          </View>
-
-          {selected && (
-            <View style={styles.selectedInfo}>
-              <Text style={styles.selectedMonth}>{selected.month} {selectedYear}</Text>
-              <Text style={styles.selectedValue}>
-                {selected.liters >= 1000
-                  ? `${(selected.liters / 1000).toFixed(2)}k L`
-                  : `${selected.liters.toFixed(1)} L`}
-              </Text>
-              {selectedIndex === currentMonthIndex && selectedYear === currentYear && (
-                <View style={styles.partialBadge}>
-                  <Text style={styles.partialBadgeText}>Live Month</Text>
+              <View style={styles.chartArea}>
+                <View style={styles.yAxis}>
+                  {[1, 0.75, 0.5, 0.25, 0].map((pct, i) => (
+                    <Text key={i} style={styles.yLabel}>
+                      {((maxValue * pct) / 1000).toFixed(1)}k
+                    </Text>
+                  ))}
                 </View>
-              )}
-            </View>
-          )}
 
-          {/* Chart */}
-          <View style={styles.chartArea}>
-            {/* Y-axis labels */}
-            <View style={styles.yAxis}>
-              {[1, 0.75, 0.5, 0.25, 0].map((pct, i) => (
-                <Text key={i} style={styles.yLabel}>
-                  {((maxValue * pct) / 1000).toFixed(1)}k
-                </Text>
-              ))}
-            </View>
-
-            {/* Bars */}
-            <View style={styles.barsContainer}>
-              {/* Horizontal grid lines */}
-              {[0.25, 0.5, 0.75, 1].map((pct, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.gridLine,
-                    // barsRow sits at bottom: 20, so offset grid lines by 20 as well
-                    { bottom: CHART_HEIGHT * pct + 20 },
-                  ]}
-                />
-              ))}
-
-              <View style={styles.barsRow}>
-                {analyticsData.map((item, index) => (
-                  <AnimatedBar
-                    key={item.month}
-                    item={item}
-                    index={index}
-                    maxValue={maxValue}
-                    isCurrent={index === currentMonthIndex && selectedYear === currentYear}
-                    isSelected={selectedIndex === index}
-                    onPress={() => setSelectedIndex(index)} // Now only selects, never unselects
-                  />
-                ))}
+                <View style={styles.barsContainer}>
+                  {[0.25, 0.5, 0.75, 1].map((pct, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.gridLine,
+                        { bottom: (pct * CHART_HEIGHT) + 20 },
+                      ]}
+                    />
+                  ))}
+                  
+                  <View style={styles.barsRow}>
+                    {analyticsData.map((item, index) => (
+                      <AnimatedBar
+                        key={item.key}
+                        item={item}
+                        index={index}
+                        maxValue={maxValue}
+                        isCurrent={index === currentMonthIndex && selectedYear === currentYear}
+                        isSelected={selectedIndex === index}
+                        onPress={() => setSelectedIndex(index)}
+                      />
+                    ))}
+                  </View>
+                </View>
               </View>
             </View>
-          </View>
-        </View>
+          </>
+        )}
 
-        <View style={{ height: 24 }} />
+        <View style={{ height: 100 }} />
       </ScrollView>
+
+      <AdminDeviceSelector />
     </View>
   );
 }
@@ -432,30 +452,109 @@ const styles = StyleSheet.create({
   },
   yearPillTextActive: { color: Colors.primary },
 
-  olderDropdown: {
-    position: 'absolute',
-    top: 36,
-    right: 0,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 30,
+  },
+  yearModalContent: {
+    width: '100%',
     backgroundColor: Colors.bgCard,
+    borderRadius: 24,
+    padding: 24,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  yearModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  yearGridScrollContainer: {
+    maxHeight: 320, // Enough for ~4 rows before scrolling
+    width: '100%',
+  },
+  yearGridScroll: {
+    width: '100%',
+  },
+  yearGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    justifyContent: 'center',
     paddingVertical: 4,
-    minWidth: 80,
-    zIndex: 100, // ensure it floats over charts
   },
-  olderDropdownItem: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+  yearGridItem: {
+    width: '45%',
+    backgroundColor: Colors.bgCardAlt,
+    paddingVertical: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
-  olderDropdownItemActive: {
+  yearGridItemActive: {
     backgroundColor: Colors.primaryGlow,
+    borderColor: Colors.primary,
   },
-  olderDropdownText: {
-    fontSize: 13,
+  yearGridText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  yearGridTextActive: {
+    color: Colors.primary,
+  },
+  currentYearDot: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+  },
+  modalCloseBtn: {
+    marginTop: 24,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.bgCardAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+  },
+  modalCloseBtnText: {
+    fontSize: 15,
     fontWeight: '600',
     color: Colors.textSecondary,
-    textAlign: 'center',
+  },
+  screenLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  titleWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  yearIndicator: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: Colors.primaryGlow,
   },
 
   header: {
@@ -627,5 +726,26 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: Colors.textMuted,
     textAlign: 'center',
+  },
+  headerSubRow: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  impersonationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,255,179,0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,179,0.2)',
+    gap: 6,
+  },
+  impersonationText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.accent,
   },
 });

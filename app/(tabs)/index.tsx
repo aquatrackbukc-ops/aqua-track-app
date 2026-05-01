@@ -5,7 +5,7 @@ import { db, auth } from '@/lib/firebase';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { signOut } from 'firebase/auth';
-import { onValue, ref } from 'firebase/database';
+import { onValue, ref, get, query, limitToLast } from 'firebase/database';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -94,6 +94,55 @@ function FlowStatusCard({ active, flowRate }: { active: boolean; flowRate: numbe
   );
 }
 
+function GlobalSystemOverview({ stats, usersCount }: { stats: any; usersCount: number }) {
+  return (
+    <View style={styles.scrollContent}>
+      <View style={[styles.card, { padding: 22, backgroundColor: Colors.primaryGlow, borderColor: Colors.primary }]}>
+        <Text style={styles.cardLabel}>System-Wide Consumption</Text>
+        <View style={styles.usageValueRow}>
+          <Text style={[styles.usageValue, { color: Colors.primary }]}>
+            {stats.totalLiters.toLocaleString()}
+          </Text>
+          <Text style={styles.usageUnit}> Liters Tot.</Text>
+        </View>
+        <Text style={styles.usageDetailText}>Aggregated fleet performance</Text>
+      </View>
+
+      <View style={styles.statsGrid}>
+        <View style={styles.statBox}>
+          <Ionicons name="hardware-chip-outline" size={20} color={Colors.accent} />
+          <Text style={styles.statBoxValue}>{stats.activeDevices}</Text>
+          <Text style={styles.statBoxLabel}>Active Meters</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Ionicons name="people-outline" size={20} color={Colors.primary} />
+          <Text style={styles.statBoxValue}>{usersCount}</Text>
+          <Text style={styles.statBoxLabel}>Total Users</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Ionicons name="water-outline" size={20} color={Colors.accent} />
+          <Text style={styles.statBoxValue}>{stats.flowingDevices}</Text>
+          <Text style={styles.statBoxLabel}>Flowing Now</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Ionicons name="shield-checkmark-outline" size={20} color={Colors.primary} />
+          <Text style={styles.statBoxValue}>Healthy</Text>
+          <Text style={styles.statBoxLabel}>Fleet Health</Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <View style={{ padding: 22 }}>
+          <Text style={styles.cardLabel}>Admin Command Center</Text>
+          <Text style={styles.noDeviceSub}>
+            Welcome to the AquaTrack Nerve Center. Use the floating switcher at the bottom right to inspect specific users or raw hardware nodes.
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function UsageProgressCard({ litersUsed, daysMonitored }: { litersUsed: number; daysMonitored: number }) {
   return (
     <View style={[styles.card, styles.usageCard]}>
@@ -121,20 +170,61 @@ function UsageProgressCard({ litersUsed, daysMonitored }: { litersUsed: number; 
   );
 }
 
-function StatGrid({ litersUsed, lastUpdated }: { litersUsed: number; lastUpdated: string }) {
-  // Simple logic for stats based on current monthly total
+function StatGrid({
+  litersUsed,
+  lastUpdated,
+  pricing,
+  historicalAvg,
+}: {
+  litersUsed: number;
+  lastUpdated: string;
+  pricing: { pricePerLiter: number; currency: string };
+  historicalAvg: number | null;
+}) {
   const today = new Date();
   const todayDay = today.getDate();
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
   const daysLeft = daysInMonth - todayDay;
-  const dailyAverage = litersUsed / todayDay;
-  const projectedTotal = dailyAverage * daysInMonth;
+  
+  const currentAvg = litersUsed / todayDay;
+  
+  // Confidence Blending Logic
+  let projectedAvg = currentAvg;
+  
+  if (historicalAvg !== null) {
+    if (todayDay <= 5) {
+      // Early Month: 80% History, 20% Current Trend
+      projectedAvg = (historicalAvg * 0.8) + (currentAvg * 0.2);
+    } else if (todayDay <= 15) {
+      // Mid Month: 50% History, 50% Current Trend
+      projectedAvg = (historicalAvg * 0.5) + (currentAvg * 0.5);
+    } else {
+      // Late Month: 100% Current Trend (Realized)
+      projectedAvg = currentAvg;
+    }
+  }
+
+  const projectedTotal = projectedAvg * daysInMonth;
+  const currentCost = litersUsed * pricing.pricePerLiter;
+  const projectedCost = projectedTotal * pricing.pricePerLiter;
 
   const stats = [
     {
+      icon: 'cash-outline' as const,
+      label: 'Current Bill',
+      value: `${pricing.currency} ${Math.floor(currentCost).toLocaleString()}`,
+      sub: 'this month',
+    },
+    {
+      icon: 'wallet-outline' as const,
+      label: 'Projected Bill',
+      value: `${pricing.currency} ${Math.floor(projectedCost).toLocaleString()}`,
+      sub: historicalAvg && todayDay <= 15 ? 'stabilized est.' : 'end-of-month est.',
+    },
+    {
       icon: 'today-outline' as const,
       label: 'Daily Average',
-      value: `${dailyAverage.toFixed(1)} L`,
+      value: `${currentAvg.toFixed(1)} L`,
       sub: 'per day',
     },
     {
@@ -174,9 +264,13 @@ function StatGrid({ litersUsed, lastUpdated }: { litersUsed: number; lastUpdated
 // ── Main Screen ────────────────────────────────────────────────────────────
 
 export default function DashboardScreen() {
-  const { profile, loading: authLoading, activeDeviceId } = useAuth();
+  const { profile, loading: authLoading, activeDeviceId, impersonatedUser, setImpersonatedUser, isAdmin } = useAuth();
   const [sensorData, setSensorData] = useState<any>(null);
+  const [pricing, setPricing] = useState({ pricePerLiter: 0, currency: 'PKR' });
+  const [historicalAvg, setHistoricalAvg] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [globalStats, setGlobalStats] = useState({ totalLiters: 0, activeDevices: 0, flowingDevices: 0 });
+  const [userCount, setUserCount] = useState(0);
   const headerAnim = useRef(new Animated.Value(0)).current;
 
   const handleLogout = async () => {
@@ -196,22 +290,105 @@ export default function DashboardScreen() {
   }, []);
 
   useEffect(() => {
-    if (authLoading || !activeDeviceId) {
-      if (!authLoading && !activeDeviceId) setLoading(false);
+    if (authLoading) return;
+
+    if (!activeDeviceId && isAdmin) {
+      let devicesReady = false;
+      let usersReady = false;
+      const checkReady = () => { if (devicesReady && usersReady) setLoading(false); };
+
+      const devicesRef = ref(db, 'AquaTrack');
+      const unsubDevices = onValue(devicesRef, (snap) => {
+        const data = snap.val();
+        if (data) {
+          let totalL = 0;
+          let flowing = 0;
+          let activeNodes = 0;
+          Object.values(data).forEach((device: any) => {
+            totalL += device.TotalLiters || 0;
+            if (device.WaterStatus === 'Connected' || device.FlowRate_LPM > 0) activeNodes++;
+            if (device.FlowRate_LPM > 0) flowing++;
+          });
+          setGlobalStats({ totalLiters: totalL, activeDevices: activeNodes, flowingDevices: flowing });
+        }
+        devicesReady = true;
+        checkReady();
+      });
+
+      const usersRef = ref(db, 'users');
+      const unsubUsers = onValue(usersRef, (snap) => {
+        const data = snap.val();
+        if (data) setUserCount(Object.keys(data).length);
+        usersReady = true;
+        checkReady();
+      });
+
+      return () => {
+        unsubDevices();
+        unsubUsers();
+      };
+    }
+
+    if (!activeDeviceId) {
+      setLoading(false);
       return;
     }
 
     const deviceRef = ref(db, `AquaTrack/${activeDeviceId}`);
-    const unsubscribe = onValue(deviceRef, (snapshot) => {
+    const unsubscribeDevice = onValue(deviceRef, (snapshot) => {
       setSensorData(snapshot.val());
       setLoading(false);
     });
+    const pricingRef = ref(db, 'settings/pricing');
+    const unsubscribePricing = onValue(pricingRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) {
+        setPricing({
+          pricePerLiter: val.pricePerLiter ?? 0,
+          currency: val.currency ?? 'PKR',
+        });
+      }
+    });
 
-    return () => unsubscribe();
-  }, [activeDeviceId, authLoading]);
+    // Fetch Historical Average (Same month last year OR most recent)
+    const fetchHistory = async () => {
+      const now = new Date();
+      const lastYearKey = `${now.getFullYear() - 1}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+      
+      try {
+        // 1. Try same month last year
+        const lastYearRef = ref(db, `history/${activeDeviceId}/${lastYearKey}`);
+        const lastYearSnap = await get(lastYearRef);
+        
+        if (lastYearSnap.exists()) {
+          setHistoricalAvg(lastYearSnap.val().averageDailyLiters);
+          return;
+        }
+        
+        // 2. Fallback to most recent record
+        const recentQuery = query(ref(db, `history/${activeDeviceId}`), limitToLast(1));
+        const recentSnap = await get(recentQuery);
+        
+        if (recentSnap.exists()) {
+          const data = recentSnap.val();
+          const latestKey = Object.keys(data)[0];
+          setHistoricalAvg(data[latestKey].averageDailyLiters);
+        }
+      } catch (e) {
+        console.error('Error fetching baseline:', e);
+      }
+    };
 
-  // Loading state
-  if (authLoading || (loading && activeDeviceId)) {
+    fetchHistory();
+
+    return () => {
+      unsubscribeDevice();
+      unsubscribePricing();
+    };
+  }, [activeDeviceId, authLoading, isAdmin]);
+
+  // Loading state: Show indicator until auth is ready AND initial data is fetched
+  if (authLoading || loading) {
     return (
       <View style={[styles.root, styles.center]}>
         <ActivityIndicator size="large" color={Colors.primary} />
@@ -219,21 +396,6 @@ export default function DashboardScreen() {
     );
   }
 
-  // No device state
-  if (!activeDeviceId) {
-    return (
-      <View style={[styles.root, styles.center, { padding: 40 }]}>
-        <AdminDeviceSelector />
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Ionicons name="alert-circle-outline" size={80} color={Colors.textMuted} />
-          <Text style={styles.noDeviceTitle}>No Device Assigned</Text>
-          <Text style={styles.noDeviceSub}>
-            Please contact your administrator to link a smart water meter to your account.
-          </Text>
-        </View>
-      </View>
-    );
-  }
 
   const flowActive = sensorData?.WaterStatus === 'Connected' || sensorData?.FlowRate_LPM > 0;
   const flowRate = sensorData?.FlowRate_LPM || 0;
@@ -258,7 +420,6 @@ export default function DashboardScreen() {
             styles.header,
             { opacity: headerAnim, transform: [{ translateY: headerAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] }) }] },
           ]}>
-          <AdminDeviceSelector />
           <LinearGradient
             colors={['rgba(0,200,255,0.15)', 'transparent']}
             style={styles.headerGradient}
@@ -274,23 +435,72 @@ export default function DashboardScreen() {
               <Ionicons name="log-out-outline" size={28} color={Colors.danger} />
             </TouchableOpacity>
           </View>
-          <Text style={styles.headerSub}>
-            {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}  •  {activeDeviceId}
-          </Text>
+          <View style={styles.headerSubRow}>
+            <Text style={styles.headerSub}>
+              {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            </Text>
+            {impersonatedUser && (
+              <TouchableOpacity 
+                style={styles.impersonationBadge}
+                onPress={() => setImpersonatedUser(null)}
+              >
+                <Ionicons name="eye-outline" size={14} color={Colors.accent} />
+                <Text style={styles.impersonationText}>Viewing: {impersonatedUser.name}</Text>
+                <Ionicons name="close-circle" size={14} color={Colors.textMuted} style={{marginLeft: 4}} />
+              </TouchableOpacity>
+            )}
+            {!impersonatedUser && !isAdmin && (
+              <Text style={styles.headerSub}>  •  {activeDeviceId}</Text>
+            )}
+            {!impersonatedUser && isAdmin && !activeDeviceId && (
+               <View style={styles.impersonationBadge}>
+                 <Ionicons name="shield-outline" size={14} color={Colors.accent} />
+                 <Text style={styles.impersonationText}>System-Wide Overview</Text>
+               </View>
+            )}
+            {!impersonatedUser && isAdmin && activeDeviceId && (
+              <TouchableOpacity 
+                style={styles.impersonationBadge}
+                onPress={() => setImpersonatedUser(null)}
+              >
+                <Ionicons name="eye-outline" size={14} color={Colors.accent} />
+                <Text style={styles.impersonationText}>Viewing: {activeDeviceId}</Text>
+                <Ionicons name="close-circle" size={14} color={Colors.textMuted} style={{marginLeft: 4}} />
+              </TouchableOpacity>
+            )}
+          </View>
         </Animated.View>
 
-        {/* Flow card */}
-        <FlowStatusCard active={flowActive} flowRate={flowRate} />
+        {/* Main Content */}
+        {!activeDeviceId && isAdmin ? (
+          <GlobalSystemOverview stats={globalStats} usersCount={userCount} />
+        ) : !activeDeviceId ? (
+          <View style={[styles.center, { marginTop: 100, padding: 40 }]}>
+            <Ionicons name="water-outline" size={80} color={Colors.textMuted} />
+            <Text style={styles.noDeviceTitle}>Access Pending</Text>
+            <Text style={styles.noDeviceSub}>
+              We haven't linked a water meter to your account yet. Contact your administrator to get started.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <FlowStatusCard active={flowActive} flowRate={flowRate} />
+            <UsageProgressCard litersUsed={litersUsed} daysMonitored={todayDay} />
+            <Text style={styles.sectionTitle}>Quick Stats</Text>
+            <StatGrid 
+              litersUsed={litersUsed} 
+              lastUpdated={lastUpdated} 
+              pricing={pricing} 
+              historicalAvg={historicalAvg}
+            />
+          </>
+        )}
 
-        {/* Monthly usage card */}
-        <UsageProgressCard litersUsed={litersUsed} daysMonitored={todayDay} />
-
-        {/* Stat grid */}
-        <Text style={styles.sectionTitle}>Quick Stats</Text>
-        <StatGrid litersUsed={litersUsed} lastUpdated={lastUpdated} />
-
-        <View style={{ height: 24 }} />
+        <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Floating switcher for admins */}
+      <AdminDeviceSelector />
     </View>
   );
 }
@@ -353,11 +563,32 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   headerSub: {
-    paddingHorizontal: 20,
-    marginTop: 6,
     fontSize: 13,
     color: Colors.textMuted,
     letterSpacing: 0.3,
+  },
+  headerSubRow: {
+    paddingHorizontal: 20,
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  impersonationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,255,179,0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,255,179,0.2)',
+    gap: 6,
+  },
+  impersonationText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.accent,
   },
   headerIconBox: {
     width: 52,
@@ -509,5 +740,34 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 14,
+    gap: 12,
+    marginTop: 8,
+    marginBottom: 20,
+  },
+  statBox: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: Colors.bgCard,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    gap: 8,
+  },
+  statBoxValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+  },
+  statBoxLabel: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    fontWeight: '600',
   },
 });
