@@ -1,7 +1,16 @@
+import AdminDeviceSelector from '@/components/AdminDeviceSelector';
+import { Colors } from '@/constants/theme';
+import { useAuth } from '@/context/AuthContext';
+import { db } from '@/lib/firebase';
+import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { onValue, ref } from 'firebase/database';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Modal,
   Platform,
   ScrollView,
   StatusBar,
@@ -9,16 +18,7 @@ import {
   Text,
   TouchableOpacity,
   View,
-  Modal,
 } from 'react-native';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
-import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '@/constants/theme';
-import { useAuth } from '@/context/AuthContext';
-import AdminDeviceSelector from '@/components/AdminDeviceSelector';
-import { db } from '@/lib/firebase';
-import { onValue, ref } from 'firebase/database';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface MonthlyRecord {
@@ -30,6 +30,8 @@ interface MonthlyRecord {
   averageDailyLiters: number;
   pricePerLiter?: number; // Historical rate
   currency?: string;    // Historical currency
+  isPaid?: boolean;
+  dueDate?: string;
 }
 
 interface PricingSettings {
@@ -97,7 +99,7 @@ function HistoryCard({
 
   const expandedHeight = anim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 300], // Bumped to 300 to ensure button clearance
+    outputRange: [0, 380], // Bumped to 380 to ensure button clearance with 5 items
   });
 
   return (
@@ -124,6 +126,10 @@ function HistoryCard({
             <View style={styles.litresRow}>
               <Text style={styles.litresValue}>{formatLiters(item.totalLiters)}</Text>
             </View>
+          </View>
+          {/* Status badge */}
+          <View style={[styles.costBadge, { backgroundColor: item.isPaid ? 'rgba(0,255,179,0.1)' : 'rgba(244,63,94,0.1)', borderColor: item.isPaid ? Colors.primary : '#f43f5e', marginRight: 8 }]}>
+            <Text style={[styles.costBadgeText, { color: item.isPaid ? Colors.primary : '#f43f5e' }]}>{item.isPaid ? 'PAID' : 'DUE'}</Text>
           </View>
           {/* Cost badge */}
           <View style={styles.costBadge}>
@@ -158,6 +164,12 @@ function HistoryCard({
           <View style={styles.expandedContent}>
             <View style={styles.divider} />
             <View style={styles.detailGrid}>
+              <DetailStat
+                label="Due Date"
+                value={item.dueDate ? new Date(item.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—'}
+                icon="time-outline"
+                valueColor={item.isPaid ? Colors.primary : "#f43f5e"}
+              />
               <DetailStat
                 label="Daily Average"
                 value={`${item.averageDailyLiters.toFixed(1)} L`}
@@ -261,25 +273,25 @@ function renderUsageChart(allRecords: MonthlyRecord[], currentMonthKey: string) 
   // Get last 12 months in chronological order
   const sorted = [...allRecords].sort((a, b) => a.key.localeCompare(b.key));
   const latestIndex = sorted.findIndex(r => r.key === currentMonthKey);
-  const chartData = latestIndex !== -1 
+  const chartData = latestIndex !== -1
     ? sorted.slice(Math.max(0, latestIndex - 11), latestIndex + 1)
     : sorted.slice(-12);
-  
+
   const width = 600;
   const height = 140;
   const padding = 20;
   const maxL = Math.max(...chartData.map(d => d.totalLiters), 10);
   const barW = (width - padding * 2) / 12 - 6;
-  
+
   let barsHtml = '';
   chartData.forEach((d, i) => {
     const barH = (d.totalLiters / maxL) * (height - padding * 2);
     const x = padding + i * (barW + 6);
     const y = height - padding - barH;
     const isActive = d.key === currentMonthKey;
-    
+
     barsHtml += `
-      <rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="${isActive ? '#00ffb3' : '#e2e8f0'}" rx="3" />
+      <rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="${isActive ? '#00c8ff' : '#e2e8f0'}" rx="3" />
       <text x="${x + barW / 2}" y="${height - 5}" font-size="8" text-anchor="middle" fill="#94a3b8">${d.key.split('-')[1]}</text>
     `;
   });
@@ -334,7 +346,7 @@ export default function HistoryScreen() {
         const records: MonthlyRecord[] = Object.entries(val).map(([key, data]: [string, any]) => {
           const liters = data.totalLiters ?? 0;
           const cost = data.totalCost ?? 0;
-          
+
           // Intelligent fallback: if pricePerLiter is missing, calculate it from cost/liters
           let rate = data.pricePerLiter;
           if (rate === undefined && liters > 0) {
@@ -350,6 +362,8 @@ export default function HistoryScreen() {
             averageDailyLiters: data.averageDailyLiters ?? 0,
             pricePerLiter: rate,
             currency: data.currency,
+            isPaid: data.isPaid,
+            dueDate: data.dueDate,
           };
         });
 
@@ -381,10 +395,15 @@ export default function HistoryScreen() {
       : historyData.filter(d => d.key.startsWith(filter));
 
   const exportPDF = async (record: MonthlyRecord, mode: 'download' | 'share' = 'download') => {
-    const dueDate = new Date();
-    dueDate.setDate(dueDate.getDate() + 15);
-    const formattedDueDate = dueDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
-    
+    let formattedDueDate = '—';
+    if (record.dueDate) {
+      formattedDueDate = new Date(record.dueDate).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    } else {
+      const fallbackDate = new Date();
+      fallbackDate.setDate(fallbackDate.getDate() + 15);
+      formattedDueDate = fallbackDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
     const usageChartSvg = renderUsageChart(historyData, record.key);
 
     const html = `
@@ -394,8 +413,8 @@ export default function HistoryScreen() {
           <style>
             * { box-sizing: border-box; }
             body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 30px; color: #1e293b; line-height: 1.4; }
-            .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 4px solid #00ffb3; padding-bottom: 20px; margin-bottom: 30px; }
-            .brand-section h1 { margin: 0; color: #00ffb3; font-size: 32px; font-weight: 900; letter-spacing: -2px; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 4px solid #00c8ff; padding-bottom: 20px; margin-bottom: 30px; }
+            .brand-section h1 { margin: 0; color: #00c8ff; font-size: 32px; font-weight: 900; letter-spacing: -2px; }
             .brand-section p { margin: 2px 0; color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; }
             .consumer-info { text-align: right; }
             .consumer-info h2 { margin: 0; font-size: 15px; font-weight: 800; color: #0f172a; }
@@ -405,11 +424,11 @@ export default function HistoryScreen() {
             .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; text-align: center; }
             .box-label { font-size: 9px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
             .box-value { font-size: 12px; font-weight: 800; color: #0f172a; }
-            .box-value.highlight { color: #00ffb3; font-size: 18px; }
+            .box-value.highlight { color: #00c8ff; font-size: 18px; }
             
             .chart-box { margin-bottom: 30px; border: 1px solid #f1f5f9; border-radius: 16px; padding: 15px; }
             .section-label { font-size: 11px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 12px; display: flex; align-items: center; }
-            .section-label::before { content: ''; width: 4px; height: 14px; background: #00ffb3; margin-right: 8px; border-radius: 2px; }
+            .section-label::before { content: ''; width: 4px; height: 14px; background: #00c8ff; margin-right: 8px; border-radius: 2px; }
             
             .details-table { width: 100%; border-collapse: collapse; margin-bottom: 35px; }
             .details-table th { text-align: left; padding: 10px; background: #f8fafc; font-size: 10px; text-transform: uppercase; color: #64748b; }
@@ -421,7 +440,7 @@ export default function HistoryScreen() {
             
             .total-ribbon { background: #0f172a; color: white; padding: 20px; border-radius: 14px; display: flex; justify-content: space-between; align-items: center; }
             .total-label { font-size: 13px; font-weight: 700; color: #94a3b8; }
-            .total-val { font-size: 28px; font-weight: 900; color: #00ffb3; }
+            .total-val { font-size: 28px; font-weight: 900; color: #00c8ff; }
           </style>
         </head>
         <body>
@@ -433,13 +452,12 @@ export default function HistoryScreen() {
             <div class="consumer-info">
               <h2>Consumer: ${impersonatedUser?.name || profile?.name || 'Valued Customer'}</h2>
               <p>Device ID: ${activeDeviceId}</p>
-              <p>Reference: #QT-${record.key.replace('-', '')}</p>
             </div>
           </div>
 
           <div class="summary-deck">
             <div class="summary-box">
-              <div class="box-label">Amount Due</div>
+              <div class="box-label">${record.isPaid ? 'Amount Paid' : 'Amount Due'}</div>
               <div class="box-value highlight">${record.currency || pricing.currency} ${record.totalCost.toFixed(0)}</div>
             </div>
             <div class="summary-box">
@@ -525,10 +543,10 @@ export default function HistoryScreen() {
         link.click();
       } else if (mode === 'share') {
         const { uri } = await Print.printToFileAsync({ html });
-        await Sharing.shareAsync(uri, { 
-          UTI: '.pdf', 
+        await Sharing.shareAsync(uri, {
+          UTI: '.pdf',
           mimeType: 'application/pdf',
-          dialogTitle: `AquaTrack Invoice - ${record.monthName}` 
+          dialogTitle: `AquaTrack Invoice - ${record.monthName}`
         });
       } else {
         await Print.printAsync({ html });
@@ -551,15 +569,15 @@ export default function HistoryScreen() {
         animationType="fade"
         onRequestClose={() => setShowYearPicker(false)}
       >
-        <TouchableOpacity 
-          style={styles.modalOverlay} 
-          activeOpacity={1} 
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
           onPress={() => setShowYearPicker(false)}
         >
           <View style={styles.yearModalContent}>
             <Text style={styles.yearModalTitle}>Filter by Year</Text>
             <View style={styles.yearGridScrollContainer}>
-              <ScrollView 
+              <ScrollView
                 style={styles.yearGridScroll}
                 contentContainerStyle={styles.yearGrid}
                 showsVerticalScrollIndicator={true}
@@ -608,7 +626,7 @@ export default function HistoryScreen() {
                 ))}
               </ScrollView>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.modalCloseBtn}
               onPress={() => setShowYearPicker(false)}
             >
@@ -638,7 +656,7 @@ export default function HistoryScreen() {
               ],
             },
           ]}>
-          <TouchableOpacity 
+          <TouchableOpacity
             activeOpacity={0.7}
             onPress={() => setShowYearPicker(true)}
             style={{ paddingHorizontal: 20, paddingTop: 10 }}
@@ -657,7 +675,7 @@ export default function HistoryScreen() {
             </View>
             <View style={styles.headerSubRow}>
               {impersonatedUser ? (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.impersonationBadge}
                   onPress={() => setImpersonatedUser(null)}
                 >
@@ -665,7 +683,7 @@ export default function HistoryScreen() {
                   <Text style={styles.impersonationText}>
                     {impersonatedUser.uid === 'raw' ? `Meter: ${impersonatedUser.deviceId}` : `Viewing: ${impersonatedUser.name}`}
                   </Text>
-                  <Ionicons name="close-circle" size={14} color={Colors.textMuted} style={{marginLeft: 4}} />
+                  <Ionicons name="close-circle" size={14} color={Colors.textMuted} style={{ marginLeft: 4 }} />
                 </TouchableOpacity>
               ) : (
                 <View style={styles.deviceRow}>
@@ -683,11 +701,11 @@ export default function HistoryScreen() {
         {/* Main Content */}
         {!activeDeviceId && isAdmin ? (
           <View style={{ padding: 40, alignItems: 'center', marginTop: 100 }}>
-             <Ionicons name="library-outline" size={80} color={Colors.primary} />
-             <Text style={styles.emptyTitle}>Records Portal</Text>
-             <Text style={styles.emptySub}>
-               Select a user or a specific meter from the search switcher to view historical invoices and billing records.
-             </Text>
+            <Ionicons name="library-outline" size={80} color={Colors.primary} />
+            <Text style={styles.emptyTitle}>Records Portal</Text>
+            <Text style={styles.emptySub}>
+              Select a user or a specific meter from the search switcher to view historical invoices and billing records.
+            </Text>
           </View>
         ) : !activeDeviceId ? (
           <View style={styles.emptyState}>
@@ -745,8 +763,8 @@ export default function HistoryScreen() {
             </View>
 
             {selectedInvoice && (
-              <ScrollView 
-                style={styles.invoiceBody} 
+              <ScrollView
+                style={styles.invoiceBody}
                 contentContainerStyle={{ paddingBottom: 40 }}
                 showsVerticalScrollIndicator={false}
               >
@@ -755,11 +773,7 @@ export default function HistoryScreen() {
                   <View>
                     <Text style={[styles.invoiceLabel, { marginBottom: 0 }]}>Consumer Details</Text>
                     <Text style={styles.invoiceConsumerName}>{impersonatedUser?.name || profile?.name || 'Valued Customer'}</Text>
-                    <Text style={styles.invoiceDescriptor}>Device: ${activeDeviceId}</Text>
-                  </View>
-                  <View style={styles.invoiceRefBox}>
-                    <Text style={styles.invoiceRefLabel}>REFERENCE</Text>
-                    <Text style={styles.invoiceRefVal}>#AT-${selectedInvoice.key.replace('-', '')}</Text>
+                    <Text style={styles.invoiceDescriptor}>Device: {activeDeviceId}</Text>
                   </View>
                 </View>
 
@@ -785,15 +799,15 @@ export default function HistoryScreen() {
                 <View style={styles.modalChartContainer}>
                   <Text style={styles.modalSectionTitle}>12-Month Usage Trend</Text>
                   <View style={styles.modalUsageStats}>
-                     {/* We can't render the SVG string directly in RN easily without a WebView, 
+                    {/* We can't render the SVG string directly in RN easily without a WebView, 
                          but I can show a representative summary or wait for PDF. 
                          Actually, let's just keep the text breakdown detailed here. */}
-                     <View style={styles.historyHighlight}>
-                        <Ionicons name="trending-up" size={16} color={Colors.accent} />
-                        <Text style={styles.historyHighlightText}>
-                          Consumption is ${selectedInvoice.totalLiters > (historyData[1]?.totalLiters || 0) ? 'up' : 'down'} from last month
-                        </Text>
-                     </View>
+                    <View style={styles.historyHighlight}>
+                      <Ionicons name="trending-up" size={16} color={Colors.accent} />
+                      <Text style={styles.historyHighlightText}>
+                        Consumption is {selectedInvoice.totalLiters > (historyData[1]?.totalLiters || 0) ? 'up' : 'down'} from last month
+                      </Text>
+                    </View>
                   </View>
                 </View>
 
@@ -822,33 +836,35 @@ export default function HistoryScreen() {
                 </View>
 
                 <View style={styles.dueDateBadge}>
-                  <Ionicons name="time-outline" size={14} color="#f43f5e" />
-                  <Text style={styles.dueDateText}>Due by: ${new Date(Date.now() + 15 * 86400000).toLocaleDateString()}</Text>
+                  <Ionicons name={selectedInvoice.isPaid ? "checkmark-circle-outline" : "time-outline"} size={14} color={selectedInvoice.isPaid ? Colors.primary : "#f43f5e"} />
+                  <Text style={[styles.dueDateText, { color: selectedInvoice.isPaid ? Colors.primary : "#f43f5e" }]}>
+                    {selectedInvoice.isPaid ? 'Paid' : `Due by: ${selectedInvoice.dueDate ? new Date(selectedInvoice.dueDate).toLocaleDateString() : new Date(Date.now() + 15 * 86400000).toLocaleDateString()}`}
+                  </Text>
                 </View>
               </ScrollView>
             )}
 
             <View style={styles.invoiceFooter}>
               <View style={styles.dualActionRow}>
-                <TouchableOpacity 
-                  style={styles.printBtn} 
+                <TouchableOpacity
+                  style={styles.printBtn}
                   onPress={() => selectedInvoice && exportPDF(selectedInvoice, 'download')}
                 >
                   <Ionicons name="cloud-download-outline" size={18} color="#fff" />
                   <Text style={styles.printBtnText}>Download</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                  style={styles.shareBtn} 
+                <TouchableOpacity
+                  style={styles.shareBtn}
                   onPress={() => selectedInvoice && exportPDF(selectedInvoice, 'share')}
                 >
                   <Ionicons name="share-social-outline" size={18} color={Colors.primary} />
                   <Text style={styles.shareBtnText}>Share</Text>
                 </TouchableOpacity>
               </View>
-              
-              <TouchableOpacity 
-                style={styles.closeInvoiceBtn} 
+
+              <TouchableOpacity
+                style={styles.closeInvoiceBtn}
                 onPress={() => setSelectedInvoice(null)}
               >
                 <Text style={styles.closeInvoiceBtnText}>Cancel</Text>

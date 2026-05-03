@@ -36,13 +36,15 @@ const generateMonthData = (year, monthIndex, baseLiters) => {
     totalCost,
     highestUsageDay,
     averageDailyLiters,
-    pricePerLiter
+    pricePerLiter,
+    isPaid: Math.random() > 0.3,
+    dueDate: `${year}-${String(monthIndex + 1).padStart(2, '0')}-15`
   };
 };
 
 const periods = [
   ...Array.from({ length: 12 }, (_, i) => ({ year: 2025, month: i })),
-  ...Array.from({ length: 3 }, (_, i) => ({ year: 2026, month: i }))
+  ...Array.from({ length: 4 }, (_, i) => ({ year: 2026, month: i }))
 ];
 
 const devices = ['device_01', 'device_02', 'device_03'];
@@ -75,7 +77,7 @@ async function seedDatabase() {
     // Using update at root ensures we don't delete other nodes like 'users', 'AquaTrack', etc.
     await update(rootRef, dummyData);
     console.log("Successfully seeded:");
-    console.log(` - 15 months (2025 - Mar 2026) of history for ${devices.join(', ')}`);
+    console.log(` - 16 months (2025 - Apr 2026) of history for ${devices.join(', ')}`);
     console.log(` - Included pricePerLiter in each month's record.`);
     process.exit(0);
   } catch (error) {

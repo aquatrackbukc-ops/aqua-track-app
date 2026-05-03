@@ -7,6 +7,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -61,9 +62,11 @@ export default function LoginScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.header}>
-              <View style={styles.logoContainer}>
-                <Ionicons name="water" size={60} color={Colors.primary} />
-              </View>
+              <Image
+                source={require('../../assets/logo-2-nobg.png')}
+                style={{ width: 150, height: 150, marginBottom: 20, borderRadius: 25 }}
+                resizeMode="contain"
+              />
               <Text style={styles.title}>AquaTrack</Text>
               <Text style={styles.subtitle}>Smart Water Metering Solution</Text>
             </View>

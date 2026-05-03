@@ -8,6 +8,7 @@ import { ref, set } from 'firebase/database';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -40,7 +41,7 @@ export default function SignupScreen() {
       setError('Passwords do not match');
       return;
     }
-    
+
     setLoading(true);
     setError('');
     try {
@@ -55,7 +56,7 @@ export default function SignupScreen() {
         device_id: null, // Admin will assign this later
         createdAt: new Date().toISOString()
       });
-      
+
       // Root layout will handle redirect
     } catch (err: any) {
       setError(err.message || 'Signup failed');
@@ -76,7 +77,7 @@ export default function SignupScreen() {
           style={styles.container}
           keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         >
-          <ScrollView 
+          <ScrollView
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
           >
@@ -84,6 +85,11 @@ export default function SignupScreen() {
               <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                 <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
+              <Image
+                source={require('../../assets/logo-2-nobg.png')}
+                style={{ width: 150, height: 150, marginBottom: 16, borderRadius: 22 }}
+                resizeMode="contain"
+              />
               <Text style={styles.title}>Create Account</Text>
               <Text style={styles.subtitle}>Join AquaTrack community</Text>
             </View>
@@ -125,14 +131,14 @@ export default function SignupScreen() {
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
                 />
-                <TouchableOpacity 
+                <TouchableOpacity
                   onPress={() => setShowPassword(!showPassword)}
                   style={styles.eyeIcon}
                 >
-                  <Ionicons 
-                    name={showPassword ? "eye-outline" : "eye-off-outline"} 
-                    size={22} 
-                    color={Colors.textSecondary} 
+                  <Ionicons
+                    name={showPassword ? "eye-outline" : "eye-off-outline"}
+                    size={22}
+                    color={Colors.textSecondary}
                   />
                 </TouchableOpacity>
               </View>
@@ -147,14 +153,14 @@ export default function SignupScreen() {
                   onChangeText={setConfirmPassword}
                   secureTextEntry={!showConfirmPassword}
                 />
-                <TouchableOpacity 
+                <TouchableOpacity
                   onPress={() => setShowConfirmPassword(!showConfirmPassword)}
                   style={styles.eyeIcon}
                 >
-                  <Ionicons 
-                    name={showConfirmPassword ? "eye-outline" : "eye-off-outline"} 
-                    size={22} 
-                    color={Colors.textSecondary} 
+                  <Ionicons
+                    name={showConfirmPassword ? "eye-outline" : "eye-off-outline"}
+                    size={22}
+                    color={Colors.textSecondary}
                   />
                 </TouchableOpacity>
               </View>
